@@ -1,0 +1,4 @@
+interface:
+  display_name: "Package Documentation Profile"
+  short_description: "Profile package modules for better docs."
+  default_prompt: "Create or update a documentation profile for this package, module by module, tracking git hash provenance and audience facets."
