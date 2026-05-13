@@ -1,0 +1,20 @@
+{
+  "name": "hiivmind-documentation-profile-dev",
+  "interface": {
+    "displayName": "Hiivmind Documentation Profile Marketplace"
+  },
+  "plugins": [
+    {
+      "name": "hiivmind-documentation-profile",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

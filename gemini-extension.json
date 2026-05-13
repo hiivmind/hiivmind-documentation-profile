@@ -1,0 +1,6 @@
+{
+  "name": "hiivmind-documentation-profile",
+  "description": "Build auditable module-by-module package profiles before writing documentation for large projects, with audience facets and git-hash-based incremental refresh.",
+  "version": "0.1.0",
+  "contextFileName": "GEMINI.md"
+}

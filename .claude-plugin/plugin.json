@@ -1,0 +1,19 @@
+{
+  "name": "hiivmind-documentation-profile",
+  "description": "Build auditable module-by-module package profiles before writing documentation for large projects, with audience facets and git-hash-based incremental refresh.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Hiivmind",
+    "email": ""
+  },
+  "homepage": "https://github.com/hiivmind/hiivmind-documentation-profile",
+  "repository": "https://github.com/hiivmind/hiivmind-documentation-profile",
+  "license": "MIT",
+  "keywords": [
+    "documentation",
+    "skills",
+    "package-analysis",
+    "module-profiling",
+    "llm-documentation"
+  ]
+}
