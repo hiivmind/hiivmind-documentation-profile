@@ -124,6 +124,46 @@ Before writing output, verify:
 | **7: Update State** | Write updated learning graph + refresh-state.json | Refresh/Seed |
 
 ---
+## Deterministic Helper Scripts
+
+`scripts/patch_engine/` is a small, dependency-free (stdlib-only) Python
+package that performs the byte-exact, atomic parts of Phases 5-6 as tested
+code instead of ad hoc inline editing:
+
+- `markers.py` -- parses `<!-- concept:N -->` markers and the paired
+  `<!-- KIND:ID concepts:N,N --> ... <!-- /KIND:ID -->` enrichment-block
+  markers, preserving exact byte offsets and rejecting malformed/nested
+  markers.
+- `patches.py` -- validates a file's declared base digest against its
+  current bytes (rejects a stale/manually-edited target before writing
+  anything), splices one or more concept/enrichment blocks, independently
+  re-verifies that every byte outside the targeted blocks is unchanged, and
+  writes every targeted file atomically (all-or-nothing, with rollback).
+- `enrichments.py` -- computes the deterministic `faq.md` -> JSON
+  projection used by `faq-chatbot-training.json`.
+
+`scripts/apply_patch.py` is the CLI entry point a refresh run shells out to:
+
+```bash
+python3 scripts/apply_patch.py apply --project-root <dir> \
+  --invocation <invocation.json> --patch-set <patch-set.json>
+
+python3 scripts/apply_patch.py faq-export --faq <textbook>/docs/faq.md
+python3 scripts/apply_patch.py faq-verify --faq <faq.md> --json <faq-chatbot-training.json>
+python3 scripts/apply_patch.py coverage --graph <learning-graph.json> --chapters <docs/chapters>
+```
+
+`invocation.json` declares `project_root`, `allowed_outputs` (paths the run
+may touch), and `targets` (`concept_ids`/`enrichment_ids` this run is
+authorized to change); `patch-set.json` lists the files and
+replace/delete/insert_before/insert_after operations to apply. Both are
+plain JSON built by the skill run itself, not externally schema-validated --
+this tool is meant for a human-supervised run, not unattended automation.
+
+Run `PYTHONPATH=scripts python3 -m pytest scripts/tests -q` to exercise the
+54 tests covering this package before relying on it.
+
+---
 
 ## Phase 0: Intent
 
@@ -580,6 +620,19 @@ REGENERATE_CHAPTER(chapter_dir, plan_entry, learning_graph):
   RETURN { chapter: chapter_dir, words: word_count(content) }
 ```
 
+In practice, build a `patch-set.json` describing the `replace` operation for
+each `concept_id` above and apply it with:
+
+```bash
+python3 scripts/apply_patch.py apply --project-root <dir> \
+  --invocation invocation.json --patch-set patch-set.json
+```
+
+rather than splicing `content` by hand -- `apply_patch.py` rejects a stale
+`chapter_dir/index.md` (edited since this run started reading it), rejects
+an ambiguous or malformed marker set, and proves every byte outside the
+`changed_concept_ids` sections is unchanged before writing anything.
+
 ### Fallback: Chapters Without Concept Markers
 
 For chapters generated before concept markers were introduced (pre-v0.09),
@@ -658,6 +711,12 @@ REFRESH_FAQ(textbook_dir, updated_chapters):
   Write(textbook_dir/docs/learning-graph/faq-chatbot-training.json, chatbot_json)
 ```
 
+`apply_patch.py faq-export --faq <faq.md>` computes `faq-chatbot-training.json`
+directly from the just-updated `faq.md` rather than hand-editing the JSON in
+parallel with the Markdown -- the two can never drift. Confirm parity with
+`apply_patch.py faq-verify --faq <faq.md> --json <faq-chatbot-training.json>`
+before writing state in Phase 7.
+
 ### API Pages
 
 API reference pages do not need regeneration — mkdocstrings reads directly
@@ -712,6 +771,10 @@ VERIFY(textbook_dir, learning_graph, plan):
 
   REPORT issues
 ```
+
+Step 1 (concept coverage) is exactly `scripts/apply_patch.py coverage
+--graph <learning-graph.json> --chapters <docs/chapters>`; run it instead of
+reimplementing the marker/label cross-check inline.
 
 ---
 
