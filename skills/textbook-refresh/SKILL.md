@@ -10,9 +10,11 @@ changes. Instead of regenerating all chapters, this skill detects what changed,
 maps changes to affected chapters via enriched learning graph nodes, and
 regenerates only the stale sections.
 
-**Input:** A textbook project directory (containing `mkdocs.yml`, `docs/chapters/`,
-`docs/learning-graph/`), plus a code profile directory (from
-`package-documentation-profile`).
+**Required input:** `source_repo`, the explicit path to the target source
+repository or Git worktree. Relative paths are anchored to the invocation
+directory, then normalized once. The target must already contain
+`docs-site/profile/`, `docs-site/learning-graph/`, and `docs-site/site/`
+(the MkDocs project root). This is a skill input, not a new CLI.
 
 **Output:** Updated chapter content, refreshed FAQ entries, updated
 `refresh-state.json`, enriched `learning-graph.json`, and a change report.
@@ -59,9 +61,13 @@ The `metadata` block carries the refresh baseline:
   "schema": "https://raw.githubusercontent.com/dmccreary/learning-graphs/...",
   "license": "CC BY-NC-SA 4.0 DEED",
   "source_commit": "4c077666ebc560f82e9bbd7ef419bdfde2c5f62f",
-  "profile_dir": "../../../mountainash-central/03.profile/mountainash-data"
+  "profile_dir": "docs-site/profile"
 }
 ```
+
+`metadata.profile_dir` is relative to the **source repository root**, not the
+graph or site directory. It records the fixed profile location; it never
+selects the target or redirects reads or writes.
 
 ### Why the Learning Graph, Not a Separate File
 
@@ -139,29 +145,58 @@ code instead of ad hoc inline editing:
   anything), splices one or more concept/enrichment blocks, independently
   re-verifies that every byte outside the targeted blocks is unchanged, and
   writes every targeted file atomically (all-or-nothing, with rollback).
-- `enrichments.py` -- computes the deterministic `faq.md` -> JSON
-  projection used by `faq-chatbot-training.json`.
+- `enrichments.py` -- computes a deterministic JSON projection only for
+  supported paired-marker FAQs. It does not support the pilot's heading-based
+  FAQ Markdown and existing JSON shape; see the FAQ format gate below.
 
-`scripts/apply_patch.py` is the CLI entry point a refresh run shells out to:
+Resolve `skill_dir` from the installed `textbook-refresh` skill containing
+this `SKILL.md`; its helper is `skill_dir/scripts/apply_patch.py`, with
+`patch_engine/` beside it. The operator may invoke the centrally maintained
+skill from `hiivmind-documentation-profile` against a different repository.
+Do not resolve `scripts/` from the invocation directory or copy the engine
+into the target. In these commands, `$SKILL_DIR` is that absolute installed
+skill directory and `$R` is the validated, normalized `source_repo`:
 
 ```bash
-python3 scripts/apply_patch.py apply --project-root <dir> \
-  --invocation <invocation.json> --patch-set <patch-set.json>
+python3 -B "$SKILL_DIR/scripts/apply_patch.py" apply --project-root "$R" \
+  --invocation /absolute/run/invocation.json --patch-set /absolute/run/patch-set.json
 
-python3 scripts/apply_patch.py faq-export --faq <textbook>/docs/faq.md
-python3 scripts/apply_patch.py faq-verify --faq <faq.md> --json <faq-chatbot-training.json>
-python3 scripts/apply_patch.py coverage --graph <learning-graph.json> --chapters <docs/chapters>
+python3 -B "$SKILL_DIR/scripts/apply_patch.py" coverage \
+  --graph "$R/docs-site/learning-graph/learning-graph.json" \
+  --chapters "$R/docs-site/site/docs/chapters"
 ```
 
-`invocation.json` declares `project_root`, `allowed_outputs` (paths the run
-may touch), and `targets` (`concept_ids`/`enrichment_ids` this run is
-authorized to change); `patch-set.json` lists the files and
-replace/delete/insert_before/insert_after operations to apply. Both are
-plain JSON built by the skill run itself, not externally schema-validated --
-this tool is meant for a human-supervised run, not unattended automation.
+`faq-export` and `faq-verify` are **marker-format-only** commands. Do not run
+them on the existing heading-based FAQ as a validation or replacement step.
+The FAQ Refresh section defines the required format detection and preservation
+checks before either command may be used.
 
-Run `PYTHONPATH=scripts python3 -m pytest scripts/tests -q` to exercise the
-54 tests covering this package before relying on it.
+`invocation.json` declares `project_root` (the same absolute `$R` passed to
+`--project-root`), `allowed_outputs`, and `targets` (`concept_ids`/
+`enrichment_ids` this run is authorized to change). Patch file paths and
+allowlist entries are source-root-relative, for example
+`docs-site/site/docs/chapters/04-ibis-backend/index.md`, not `docs/chapters/...`.
+List only the exact documentation files approved in the plan; never allow
+the repository root, `src/`, `docs-site/profile/`, or a broad wildcard.
+Resolve each output and reject traversal or symlinks outside its intended
+documentation directory. The same boundary applies to non-helper writes:
+canonical artifacts in `docs-site/learning-graph/`, published content in
+`docs-site/site/docs/`, and state at `docs-site/site/refresh-state.json`.
+
+`patch-set.json` lists the files and replace/delete/insert_before/insert_after
+operations to apply. Both inputs are plain local JSON built by the
+human-supervised skill run, not a versioned schema protocol. The engine
+retains its stdlib-only, stale-digest rejection, byte-preservation and atomic
+write behavior; the skill is responsible for selecting the correct target
+and safe allowlist.
+
+Before operational use, run the existing focused suite from any directory:
+
+```bash
+PYTHONPATH="$SKILL_DIR/scripts" python3 -B -m pytest "$SKILL_DIR/scripts/tests" -q
+```
+
+The suite covers the helper's supported formats, not heading-based FAQ parity.
 
 ---
 
@@ -177,11 +212,13 @@ INTENT():
     - "refresh"             # detect + regenerate stale artefacts
     - "force-refresh"       # ignore state, regenerate all chapters
 
-  inputs = locate:
-    - textbook_dir          # the mkdocs project root (has mkdocs.yml)
-    - profile_dir           # 03.profile/<project> or 13.profile-usecases/<project>
-    - source_repo           # the source code git repository root
-    - learning_graph_dir    # 05.learning-graph/<project> (canonical learning graph)
+  invocation_dir = current working directory at invocation
+  REQUIRE explicit source_repo input
+  source_repo = normalize_absolute(source_repo, relative_to=invocation_dir)
+  R = source_repo
+  profile_dir = R/docs-site/profile
+  learning_graph_dir = R/docs-site/learning-graph
+  textbook_dir = R/docs-site/site
 
   validate:
     - textbook_dir/mkdocs.yml exists
@@ -190,23 +227,46 @@ INTENT():
     - learning_graph_dir/learning-graph.json exists (canonical copy)
     - profile_dir/manifest.json exists
     - profile_dir/modules/ contains at least one .json file
-    - source_repo/.git/ exists
+    - git -C R rev-parse --is-inside-work-tree returns true
+    - normalized git -C R rev-parse --show-toplevel equals R
+    - git -C R rev-parse --verify HEAD^{commit} succeeds
+    - every resolved input/output remains within its intended target directory
 ```
 
 ### Input Resolution
 
-The skill needs four directories. Infer them when possible:
+The explicit target is the only authority for all four directories above.
+Require the repository/worktree root, not a subdirectory within one. Git's
+checks accept a worktree whose `.git` is a file; do not require `.git/`.
+Missing inputs or invalid targets must report the exact path and stop before
+any write. Do not initialize a missing profile or graph, infer the target
+from `manifest.json` → `source.root` or MkDocs settings, or search an older
+centralized layout. Historical source provenance in a manifest remains
+evidence, not a filesystem routing instruction.
 
-1. **textbook_dir** — the current working directory, or specified by user
-2. **learning_graph_dir** — the canonical learning graph in `05.learning-graph/<project>/`.
-   The textbook has a copy under `docs/learning-graph/`; the canonical copy is
-   the one that gets enriched. After enrichment, the textbook copy is updated
-   to match.
-3. **profile_dir** — read from `learning-graph.json` metadata `profile_dir` if
-   enriched; otherwise search `../../../mountainash-central/03.profile/<project>`
-   and `../../../mountainash-central/13.profile-usecases/<project>`
-4. **source_repo** — infer from `profile_dir/manifest.json` → `source.root`, or
-   resolve from the textbook's `mkdocs.yml` → `mkdocstrings.handlers.python.paths`
+The canonical graph is `R/docs-site/learning-graph/learning-graph.json`.
+Enrich that copy and synchronize the existing published graph at
+`R/docs-site/site/docs/learning-graph/learning-graph.json`. Read
+`metadata.profile_dir` only as provenance: its current value is
+`docs-site/profile`, relative to `R`. Report a stale value without following
+it; an approved seed/refresh writes the fixed value to both graph copies.
+Check mode must not repair it.
+
+Inventory the existing FAQ artifacts before planning: canonical Markdown
+and JSON are `R/docs-site/learning-graph/faq.md` and
+`R/docs-site/learning-graph/faq-chatbot-training.json`; published Markdown is
+`R/docs-site/site/docs/learning-graph/faq.md`. The pilot has no published FAQ
+JSON. Synchronize existing copies only; never invent a companion file.
+If FAQ work is needed and an expected existing artifact is missing, stop
+with its path instead of constructing a replacement.
+
+**Check is read-only:** read inputs, resolve the baseline, detect/map/classify
+changes, and report the plan. Do not generate invocation/patch JSON files,
+write a report to disk, repair metadata or copies, retrofit markers, profile,
+build, or update state. If using read-only Python helpers, use `python3 -B`
+to avoid bytecode-cache writes. `force-refresh` still validates paths and
+baseline availability and requires human approval; ignoring state for
+regeneration scope does not authorize resetting provenance.
 
 ---
 
@@ -242,6 +302,16 @@ If this field is absent (graph not yet enriched), fall back to
 `refresh-state.json` → `baseline.source_commit`. If neither exists, the user
 must run seed mode first.
 
+Validate the selected hash with
+`git -C "$R" rev-parse --verify "$BASELINE^{commit}"` before detection or
+regeneration. Seed uses `manifest.json` → `source.git.current_hash` and must
+validate that commit too. An unavailable commit is a hard stop: report the
+hash and ask the operator to make the required source history available.
+Never substitute HEAD or write refreshed state to conceal a missing baseline.
+Keep source commits, tool versions, stable concept IDs, and enrichment
+provenance intact unless the existing seed/refresh operation actually updates
+them; relocation alone is not a content refresh.
+
 ### Profile Staleness Check
 
 Before proceeding, verify the code profile is not stale:
@@ -258,6 +328,20 @@ The textbook-refresh skill does **not** re-run the profiler. If the profile is
 stale, the user should run `package-documentation-profile` in incremental mode
 first, then re-run this skill. This keeps the two skills decoupled: profiling
 is an analysis step, refreshing is a content-generation step.
+
+For a separate profile update, invoke the installed
+`package-documentation-profile` skill with explicit inputs, for example:
+
+```text
+mode: incremental-refresh
+package_path: /absolute/path/to/mountainash-rules
+existing profile directory: /absolute/path/to/mountainash-rules/docs-site/profile
+output path: /absolute/path/to/mountainash-rules/docs-site/profile
+```
+
+Use the same normalized target `R` for `package_path` and `R/docs-site/profile`
+for the explicit output. This does not change the profiler's general-purpose
+default and is never run implicitly by textbook-refresh or check mode.
 
 ---
 
@@ -359,7 +443,7 @@ ENRICH_LEARNING_GRAPH(learning_graph, profile_dir, chapters_dir):
   # Step 4: Enrich metadata
   manifest = load profile_dir/manifest.json
   learning_graph.metadata.source_commit = manifest.source.git.current_hash
-  learning_graph.metadata.profile_dir = relative_path(profile_dir)
+  learning_graph.metadata.profile_dir = "docs-site/profile"  # relative to source_repo
 
   RETURN learning_graph
 ```
@@ -419,7 +503,7 @@ This is expected and not an error — typically chapter 1 concepts.
 | Field | Type | Source |
 |-------|------|--------|
 | `source_commit` | string | textbook-refresh (seed) |
-| `profile_dir` | string | textbook-refresh (seed) |
+| `profile_dir` | string | textbook-refresh (seed); `docs-site/profile`, source-root-relative |
 | All existing fields | — | learning-graph-generator |
 
 ---
@@ -624,8 +708,8 @@ In practice, build a `patch-set.json` describing the `replace` operation for
 each `concept_id` above and apply it with:
 
 ```bash
-python3 scripts/apply_patch.py apply --project-root <dir> \
-  --invocation invocation.json --patch-set patch-set.json
+python3 -B "$SKILL_DIR/scripts/apply_patch.py" apply --project-root "$R" \
+  --invocation /absolute/run/invocation.json --patch-set /absolute/run/patch-set.json
 ```
 
 rather than splicing `content` by hand -- `apply_patch.py` rejects a stale
@@ -679,43 +763,92 @@ UPDATE_LEARNING_GRAPH(learning_graph, plan):
   # Update source_commit in metadata
   learning_graph.metadata.source_commit = current_commit
 
-  # Write canonical copy (05.learning-graph/)
+  learning_graph.metadata.profile_dir = "docs-site/profile"
+
+  # Write canonical copy (R/docs-site/learning-graph/)
   Write(learning_graph_dir/learning-graph.json, learning_graph)
-  # Sync textbook copy (06.textbook-sites/.../docs/learning-graph/)
+  # Sync existing textbook copy (R/docs-site/site/docs/learning-graph/)
   Write(textbook_dir/docs/learning-graph/learning-graph.json, learning_graph)
 ```
 
 ### FAQ Refresh
 
-If any chapters were updated, regenerate FAQ entries for the affected concepts:
+If any chapters were updated, refresh only the human-approved affected FAQ
+entries, preserving the existing format and canonical/published roles.
+
+**Required format gate, before marker-only export or verification:** read the
+FAQ Markdown and canonical JSON and identify their actual structure. Supported
+helper input requires valid paired `<!-- faq:ID concepts:N,N -->` /
+`<!-- /faq:ID -->` blocks covering every question, plus JSON already using
+the helper's `schema_version`/`questions` projection with `id`, `concept_ids`,
+`question`, `answer_markdown`, and `source` fields. Marker-looking examples,
+missing/malformed blocks, partial coverage, or a different JSON shape do not
+establish support.
+
+The pilot uses `##` category headings, `###` question headings, and JSON
+`metadata` plus `questions` entries containing `category`, `question`, and
+`answer`. It has no question IDs or concept mappings to assume. Keep that
+shape and metadata; do not retrofit FAQ markers, invent IDs/mappings, or
+convert it to satisfy the helper.
+
+Retain the existing human-reviewed update flow for this heading-based format:
 
 ```pseudocode
-REFRESH_FAQ(textbook_dir, updated_chapters):
-  faq = Read(textbook_dir/docs/learning-graph/faq.md)
-  chatbot_json = Read(textbook_dir/docs/learning-graph/faq-chatbot-training.json)
+REFRESH_FAQ(learning_graph_dir, textbook_dir, updated_chapters):
+  faq = Read(learning_graph_dir/faq.md)
+  chatbot_json = Read(learning_graph_dir/faq-chatbot-training.json)
+  published_faq = Read(textbook_dir/docs/learning-graph/faq.md)
+  verify_existing_heading_faq_parity(faq, chatbot_json, published_faq)
 
   updated_concepts = collect all concept labels from updated_chapters
-  stale_questions = [q for q in chatbot_json.questions
-                     if any(c in q.concepts for c in updated_concepts)]
+  # Use existing questions/categories and chapter content; human review
+  # identifies affected questions without fabricating concept mappings.
+  stale_questions = human_review_affected_questions(chatbot_json, updated_concepts)
 
   FOR question IN stale_questions:
     new_answer = generate_faq_answer(
       question = question.question,
-      concept_context = read_updated_chapter_sections(question.concepts),
+      concept_context = read_relevant_updated_chapter_sections(question, updated_chapters),
       reading_level = "college"
     )
-    update_question_in_faq(faq, question.id, new_answer)
-    update_question_in_json(chatbot_json, question.id, new_answer)
+    update_matching_heading_answer(faq, question.category, question.question, new_answer)
+    question.answer = new_answer
 
+  verify_question_order_and_answers(faq, chatbot_json)
+  REQUIRE human review of the changes and unchanged metadata/JSON shape
+  REQUIRE input hashes still match the bytes read above
+  Write(learning_graph_dir/faq.md, faq)
+  Write(learning_graph_dir/faq-chatbot-training.json, chatbot_json)
   Write(textbook_dir/docs/learning-graph/faq.md, faq)
-  Write(textbook_dir/docs/learning-graph/faq-chatbot-training.json, chatbot_json)
+  # Sync published JSON only if it already existed and was approved in the plan.
 ```
 
-`apply_patch.py faq-export --faq <faq.md>` computes `faq-chatbot-training.json`
-directly from the just-updated `faq.md` rather than hand-editing the JSON in
-parallel with the Markdown -- the two can never drift. Confirm parity with
-`apply_patch.py faq-verify --faq <faq.md> --json <faq-chatbot-training.json>`
-before writing state in Phase 7.
+The heading-based comparison reads `###` question titles in document order
+under their `##` categories; an answer ends at the next question or category.
+Compare the ordered question/category list and each answer with canonical
+JSON `questions`, trimming surrounding whitespace only. Preserve internal
+Markdown, links, question counts, and untouched answers. Compare canonical
+and published Markdown bytes, and any already-existing JSON copy. Ambiguous
+headings, unexplained differences, or comparisons that cannot establish parity
+require human review and resolution before writing state, not a fake pass.
+
+Only for an already-supported marker-format FAQ may these commands be used:
+
+```bash
+python3 -B "$SKILL_DIR/scripts/apply_patch.py" faq-export \
+  --faq "$R/docs-site/learning-graph/faq.md"
+python3 -B "$SKILL_DIR/scripts/apply_patch.py" faq-verify \
+  --faq "$R/docs-site/learning-graph/faq.md" \
+  --json "$R/docs-site/learning-graph/faq-chatbot-training.json"
+```
+
+Capture export output for inspection; **never redirect it over an existing
+FAQ JSON file**. Before applying any supported projection, confirm the input
+contract, preservation of every unaffected question, ordering, answers, and
+existing JSON shape. An empty projection of a nonempty FAQ is a hard refusal,
+even if the CLI exits successfully. Unsupported export must never be applied.
+Use heading-based comparison for this pilot and report the marker helper as
+unsupported, not successful. Do not add a converter or CLI wrapper.
 
 ### API Pages
 
@@ -772,9 +905,10 @@ VERIFY(textbook_dir, learning_graph, plan):
   REPORT issues
 ```
 
-Step 1 (concept coverage) is exactly `scripts/apply_patch.py coverage
---graph <learning-graph.json> --chapters <docs/chapters>`; run it instead of
-reimplementing the marker/label cross-check inline.
+For marker-bearing chapters, run the installed helper's `coverage` command
+shown above against the canonical graph and `R/docs-site/site/docs/chapters`;
+do not reimplement that marker/label cross-check inline. Verify FAQ parity
+using the applicable format-specific procedure in Phase 5 before Phase 7.
 
 ---
 
@@ -840,15 +974,15 @@ When running for the first time (`mode = "seed"`), the skill:
 
 1. Reads `manifest.json` from the profile directory to get the baseline commit
 2. Reads all module profiles to extract symbols, paths, dependencies
-3. Reads the learning graph from `05.learning-graph/<project>/`
-4. Reads each chapter's concept list from `06.textbook-sites/<project>/docs/chapters/`
+3. Reads the learning graph from `R/docs-site/learning-graph/`
+4. Reads each chapter's concept list from `R/docs-site/site/docs/chapters/`
 5. **Enriches every learning graph node** with `source_module`, `source_path`,
    `chapter`, and `match_confidence`
 6. **Adds `source_commit` and `profile_dir`** to the learning graph metadata
 7. Writes the enriched learning graph back to both:
-   - `05.learning-graph/<project>/learning-graph.json` (canonical)
-   - `06.textbook-sites/<project>/docs/learning-graph/learning-graph.json` (textbook copy)
-8. Creates `refresh-state.json` with chapter content hashes and tool versions
+   - `R/docs-site/learning-graph/learning-graph.json` (canonical)
+   - `R/docs-site/site/docs/learning-graph/learning-graph.json` (textbook copy)
+8. Creates `R/docs-site/site/refresh-state.json` with chapter content hashes and tool versions
 9. Reports low-confidence matches (< 0.6) for manual review
 
 No chapter regeneration occurs in seed mode — it only enriches the graph and
@@ -1003,12 +1137,12 @@ IF no markers found AND mode == "refresh":
 ### Seed Mode
 
 ```
-User: "Set up refresh tracking for mountainash-data"
+User: "Seed textbook-refresh with source_repo=/absolute/path/to/mountainash-data"
 
 Skill:
 1. Reads manifest.json → baseline commit 4c07766
 2. Loads 22 module profiles (symbols, paths, classes)
-3. Loads 100-concept learning graph from 05.learning-graph/mountainash-data/
+3. Loads 100-concept learning graph from R/docs-site/learning-graph/
 4. Reads 9 chapter concept lists
 5. Enriches all 100 nodes: 82 mapped to modules, 10 foundational (null), 8 low-confidence
 6. Adds source_commit + profile_dir to metadata
@@ -1020,7 +1154,7 @@ Skill:
 ### Check Mode (Dry Run)
 
 ```
-User: "What's stale in mountainash-data?"
+User: "Check textbook-refresh with source_repo=/absolute/path/to/mountainash-data"
 
 Skill:
 1. Reads learning-graph.json → metadata.source_commit = 4c07766
@@ -1034,7 +1168,7 @@ Skill:
 ### Refresh Mode
 
 ```
-User: "Refresh mountainash-data"
+User: "Refresh textbook-refresh with source_repo=/absolute/path/to/mountainash-data"
 
 Skill:
 1-5. Same as check mode

@@ -1,8 +1,8 @@
 # Refresh State Schema
 
 The `refresh-state.json` file tracks ephemeral operational state for a textbook
-project. It lives at the root of each textbook project directory alongside
-`mkdocs.yml`.
+project. For the explicit target source repository root `R`, it lives at
+`R/docs-site/site/refresh-state.json`, alongside `mkdocs.yml`.
 
 **Important:** The concept-to-module-to-chapter mapping does NOT live here.
 It lives in the enriched `learning-graph.json` nodes (fields: `source_module`,
@@ -132,7 +132,7 @@ Append-only log of past refreshes.
 | Concept → chapter mapping | `learning-graph.json` nodes | Stable knowledge; shared across skills |
 | Concept → source path | `learning-graph.json` nodes | Stable knowledge; shared across skills |
 | Source baseline commit | `learning-graph.json` metadata + `refresh-state.json` baseline | Duplicated for convenience; graph is authoritative |
-| Profile directory path | `learning-graph.json` metadata | Stable knowledge |
+| Profile directory path | `learning-graph.json` metadata | `docs-site/profile`, relative to source root `R`; provenance, never an output redirect |
 | Chapter content hashes | `refresh-state.json` chapter_state | Ephemeral; changes every refresh |
 | Manual edit detection | `refresh-state.json` chapter_state | Ephemeral; operational concern |
 | Refresh audit log | `refresh-state.json` refresh_history | Ephemeral; append-only |
