@@ -1,0 +1,9 @@
+{
+  "nodes": [
+    {"id": 1, "label": "Foundations", "group": "CORE", "chapter": "01-foundations"},
+    {"id": 2, "label": "Current behavior", "group": "CORE", "chapter": "01-foundations"},
+    {"id": 4, "label": "New behavior", "group": "CORE", "chapter": "02-current-behavior"}
+  ],
+  "edges": [{"from": 2, "to": 1}, {"from": 4, "to": 2}],
+  "groups": {"CORE": {"label": "Core"}}
+}
